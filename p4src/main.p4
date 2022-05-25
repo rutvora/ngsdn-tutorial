@@ -494,6 +494,76 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
         counters = direct_counter(CounterType.packets_and_bytes);
     }
 
+    action ndp_ns_to_na(mac_addr_t target_mac) {
+        hdr.ethernet.src_addr = target_mac;
+        hdr.ethernet.dst_addr = IPV6_MCAST_01;
+        ipv6_addr_t host_ipv6_tmp = hdr.ipv6.src_addr;
+        hdr.ipv6.src_addr = hdr.ndp.target_ipv6_addr;
+        hdr.ipv6.dst_addr = host_ipv6_tmp;
+        hdr.ipv6.next_hdr = IP_PROTO_ICMPV6;
+        hdr.icmpv6.type = ICMP6_TYPE_NA;
+        hdr.ndp.flags = NDP_FLAG_ROUTER | NDP_FLAG_OVERRIDE;
+        hdr.ndp.type = NDP_OPT_TARGET_LL_ADDR;
+        hdr.ndp.length = 1;
+        hdr.ndp.target_mac_addr = target_mac;
+        standard_metadata.egress_spec = standard_metadata.ingress_port;
+    }
+
+    table ndp_table {
+        key = {
+            hdr.ndp.target_ipv6_addr: exact;
+        }
+        actions = {
+            ndp_ns_to_na;
+            @defaultonly NoAction;
+        }
+        const default_action = NoAction;
+        // The @name annotation is used here to provide a name to this table
+        // counter, as it will be needed by the compiler to generate the
+        // corresponding P4Info entity.
+        @name("ndp_table_counter")
+        counters = direct_counter(CounterType.packets_and_bytes);
+    }
+
+    table my_station_table {
+        key = {
+            hdr.ethernet.dst_addr: exact;
+        }
+        actions = { NoAction; }
+        @name("my_station_table_counter")
+        counters = direct_counter(CounterType.packets_and_bytes);
+    }
+
+    action_selector(HashAlgorithm.crc16, 32w1024, 32w16) ecmp_selector;
+
+    action set_next_hop(mac_addr_t dmac) {
+        hdr.ethernet.src_addr = hdr.ethernet.dst_addr;
+        hdr.ethernet.dst_addr = dmac;
+        // Decrement TTL
+        hdr.ipv6.hop_limit = hdr.ipv6.hop_limit - 1;
+    }
+
+    // Look for the "implementation" property in the table definition.
+    table routing_v6_table {
+      key = {
+          hdr.ipv6.dst_addr:          lpm;
+          // The following fields are not used for matching, but as input to the
+          // ecmp_selector hash function.
+          hdr.ipv6.dst_addr:          selector;
+          hdr.ipv6.src_addr:          selector;
+          hdr.ipv6.flow_label:        selector;
+          hdr.ipv6.next_hdr:          selector;
+          local_metadata.l4_src_port: selector;
+          local_metadata.l4_dst_port: selector;
+      }
+      actions = {
+          set_next_hop;
+      }
+      implementation = ecmp_selector;
+      @name("routing_v6_table_counter")
+      counters = direct_counter(CounterType.packets_and_bytes);
+    }
+
     apply {
 
         if (hdr.cpu_out.isValid()) {
@@ -517,6 +587,9 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
             // If this is an NDP NS packet, i.e., if a matching entry is found,
             // unset the "do_l3_l2" flag to skip the L3 and L2 tables, as the
             // "ndp_ns_to_na" action already set an egress port.
+            if (ndp_table.apply().hit) {
+                do_l3_l2 = false;
+            }
         }
 
         if (do_l3_l2) {
@@ -525,6 +598,10 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
             // Insert logic to match the My Station table and upon hit, the
             // routing table. You should also add a conditional to drop the
             // packet if the hop_limit reaches 0.
+            if (hdr.ipv6.isValid() && my_station_table.apply().hit) {
+                routing_v6_table.apply();
+                if(hdr.ipv6.hop_limit == 0) {drop(); }
+            }
 
             // *** TODO EXERCISE 6
             // Insert logic to match the SRv6 My SID and Transit tables as well
