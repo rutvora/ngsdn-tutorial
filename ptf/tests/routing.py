@@ -88,7 +88,7 @@ class IPv6RoutingTest(P4RuntimeTest):
         ))
         # ---- END SOLUTION ----
 
-        # Insert L3 routing entry to map pkt's IPv6 dst addr to group
+        # Insert L3 entry to app pkt's IPv6 dst addr to group
         # *** TODO EXERCISE 5
         # Modify names to match content of P4Info file (look for the fully
         # qualified name of tables, match fields, and actions.
@@ -149,7 +149,7 @@ class NdpReplyGenTest(P4RuntimeTest):
         # qualified name of tables, match fields, and actions.
         # ---- START SOLUTION ----
         self.insert(self.helper.build_table_entry(
-            table_name="IngressPipeImpl.ndp_table",
+            table_name="IngressPipeImpl.ndp_reply_table",
             match_fields={
                 # Exact match.
                 "hdr.ndp.target_ipv6_addr": switch_ip

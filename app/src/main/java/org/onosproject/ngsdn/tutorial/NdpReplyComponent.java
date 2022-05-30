@@ -210,7 +210,7 @@ public class NdpReplyComponent {
                 .withParameter(targetMacParam)
                 .build();
         // Table ID.
-        final String tableId = "IngressPipeImpl.ndp_table";
+        final String tableId = "IngressPipeImpl.ndp_reply_table";
         // ---- END SOLUTION ----
 
         // Build flow rule.
