@@ -43,6 +43,10 @@ typedef bit<32>  ipv4_addr_t;
 typedef bit<128> ipv6_addr_t;
 typedef bit<16>  l4_port_t;
 
+typedef bit<64>  segment_id_t;
+typedef bit<16>  dag_func_t;
+typedef bit<48>  supi_t;
+
 const bit<16> ETHERTYPE_IPV4 = 0x0800;
 const bit<16> ETHERTYPE_IPV6 = 0x86dd;
 
@@ -112,7 +116,9 @@ header srv6h_t {
 }
 
 header srv6_list_t {
-    bit<128>  segment_id;
+    segment_id_t  segment_id;
+    dag_func_t    dag_func;
+    supi_t        supi;
 }
 
 header tcp_t {
@@ -308,7 +314,9 @@ parser ParserImpl (packet_in packet,
     }
 
     state mark_current_srv6 {
-        local_metadata.next_srv6_sid = hdr.srv6_list.last.segment_id;
+        local_metadata.next_srv6_sid[127:64] = hdr.srv6_list.last.segment_id;
+        // local_metadata.next_srv6_sid[63:48] = hdr.srv6_list.last.dag_func;
+        // local_metadata.next_srv6_sid[47:0] = hdr.srv6_list.last.supi;
         transition check_last_srv6;
     }
 
@@ -569,22 +577,36 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
         hdr.ipv6.dst_addr = s1;
         hdr.ipv6.payload_len = hdr.ipv6.payload_len + 40;
         insert_srv6h_header(2);
+
         hdr.srv6_list[0].setValid();
-        hdr.srv6_list[0].segment_id = s2;
+        // Element 0 will always be original IPv6 address
+        hdr.srv6_list[0].segment_id = s2[127:64];
+        hdr.srv6_list[0].dag_func = s2[63:48];
+        hdr.srv6_list[0].supi = s2[47:0];
+
         hdr.srv6_list[1].setValid();
-        hdr.srv6_list[1].segment_id = s1;
+        hdr.srv6_list[1].segment_id = (s1[127:64]);
+        hdr.srv6_list[1].dag_func = 0x8002;
     }
 
     action srv6_t_insert_3(ipv6_addr_t s1, ipv6_addr_t s2, ipv6_addr_t s3) {
         hdr.ipv6.dst_addr = s1;
         hdr.ipv6.payload_len = hdr.ipv6.payload_len + 56;
         insert_srv6h_header(3);
+
         hdr.srv6_list[0].setValid();
-        hdr.srv6_list[0].segment_id = s3;
+        // Element 0 will always be original IPv6 address
+        hdr.srv6_list[0].segment_id = s3[127:64];
+        hdr.srv6_list[0].dag_func = s3[63:48];
+        hdr.srv6_list[0].supi = s3[47:0];
+
         hdr.srv6_list[1].setValid();
-        hdr.srv6_list[1].segment_id = s2;
+        hdr.srv6_list[1].segment_id = s2[127:64];
+        hdr.srv6_list[1].dag_func = 0x8002;
+
         hdr.srv6_list[2].setValid();
-        hdr.srv6_list[2].segment_id = s1;
+        hdr.srv6_list[2].segment_id = s1[127:64];
+        hdr.srv6_list[2].dag_func = 0x8002;
     }
 
     direct_counter(CounterType.packets_and_bytes) srv6_transit_table_counter;
@@ -603,6 +625,11 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
 
     // Called directly in the apply block.
     action srv6_pop() {
+      // Set ipv6 dest address correctly
+      hdr.ipv6.dst_addr[127:64] = hdr.srv6_list[0].segment_id;
+      hdr.ipv6.dst_addr[63:48]  = hdr.srv6_list[0].dag_func;
+      hdr.ipv6.dst_addr[47:0]   = hdr.srv6_list[0].supi;
+
       hdr.ipv6.next_hdr = hdr.srv6h.next_hdr;
       // SRv6 header is 8 bytes
       // SRv6 list entry is 16 bytes each
@@ -615,6 +642,30 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
       hdr.srv6_list[0].setInvalid();
       hdr.srv6_list[1].setInvalid();
       hdr.srv6_list[2].setInvalid();
+    }
+    // CHANGE bit<W> here according to the size of supi_t
+    action insert_subscriber_id(bit<48> id) {
+        hdr.srv6_list[1].supi = id;
+    }
+
+    direct_counter(CounterType.packets_and_bytes) subscriber_id_table_counter;
+    table subscriber_id {
+          key = {
+              hdr.ipv6.src_addr: exact;
+              // TODO: what other fields do we want to match?
+          }
+          actions = {
+              insert_subscriber_id;
+          }
+          counters = subscriber_id_table_counter;
+          const entries = {
+              0x2001000100010000000000000000000a: insert_subscriber_id(31346000000001);
+              0x2001000100010000000000000000000b: insert_subscriber_id(31346000000002);
+              0x2001000100010000000000000000000c: insert_subscriber_id(31346000000003);
+              0x20010001000200000000000000000001: insert_subscriber_id(31346000000004);
+              0x20010002000300000000000000000001: insert_subscriber_id(31346000000005);
+              0x20010002000400000000000000000001: insert_subscriber_id(31346000000006);
+        }
     }
 
     // *** ACL
@@ -711,6 +762,7 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
                     }
                 } else {
                     srv6_transit.apply();
+                    subscriber_id.apply();
                 }
 
                 routing_v6_table.apply();
