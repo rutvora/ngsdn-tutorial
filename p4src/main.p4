@@ -658,14 +658,7 @@ control IngressPipeImpl (inout parsed_headers_t    hdr,
               insert_subscriber_id;
           }
           counters = subscriber_id_table_counter;
-          const entries = {
-              0x2001000100010000000000000000000a: insert_subscriber_id(31346000000001);
-              0x2001000100010000000000000000000b: insert_subscriber_id(31346000000002);
-              0x2001000100010000000000000000000c: insert_subscriber_id(31346000000003);
-              0x20010001000200000000000000000001: insert_subscriber_id(31346000000004);
-              0x20010002000300000000000000000001: insert_subscriber_id(31346000000005);
-              0x20010002000400000000000000000001: insert_subscriber_id(31346000000006);
-        }
+
     }
 
     // *** ACL

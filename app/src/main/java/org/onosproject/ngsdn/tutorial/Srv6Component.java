@@ -47,6 +47,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+import java.net.Inet6Address;
 import java.util.Optional;
 
 import static com.google.common.collect.Streams.stream;
@@ -117,6 +120,38 @@ public class Srv6Component {
         deviceService.removeListener(deviceListener);
 
         log.info("Stopped");
+    }
+
+    private void setUpSubscriberIdTable(DeviceId deviceId) {
+        log.info("Adding entries in subscriberId table");
+
+        String tableId = "IngressPipeImpl.subscriber_id";
+
+        HashMap<String, Long> map = new HashMap<String, Long>();
+        map.put("2001:1:1::a", 31346000000001L);    // The 'L' in the end states type 'Long', which is necessary in Java
+
+        try {
+            for (Map.Entry<String, Long> entry : map.entrySet()) {
+                PiCriterion match = PiCriterion.builder()
+                        .matchExact(
+                                PiMatchFieldId.of("hdr.ipv6.src_addr"),
+                                Inet6Address.getByName(entry.getKey()).getAddress()
+                        ).build();
+
+                PiActionParam param = new PiActionParam(PiActionParamId.of("id"), entry.getValue().longValue());
+                PiTableAction action = PiAction.builder()
+                        .withId(PiActionId.of("IngressPipeImpl.insert_subscriber_id"))
+                        .withParameter(param)
+                        .build();
+                FlowRule myStationRule = Utils.buildFlowRule(
+                        deviceId, appId, tableId, match, action);
+
+                flowRuleService.applyFlowRules(myStationRule);
+            }
+        } catch (Exception ex) {
+            log.error(ex.getMessage());
+        }
+
     }
 
     //--------------------------------------------------------------------------
@@ -270,6 +305,7 @@ public class Srv6Component {
                     log.info("{} event! deviceId={}", event.type(), deviceId);
 
                     setUpMySidTable(event.subject().id());
+                    setUpSubscriberIdTable(deviceId);
                 });
             }
         }
@@ -292,6 +328,7 @@ public class Srv6Component {
                 .forEach(deviceId -> {
                     log.info("*** SRV6 - Starting initial set up for {}...", deviceId);
                     this.setUpMySidTable(deviceId);
+                    this.setUpSubscriberIdTable(deviceId);
                 });
     }
 
